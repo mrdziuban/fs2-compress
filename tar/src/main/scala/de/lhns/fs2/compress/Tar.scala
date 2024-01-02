@@ -63,21 +63,23 @@ class TarArchiver[F[_] : Async](chunkSize: Int) extends Archiver[F, TarArchiveEn
         stream
           .flatMap {
             case (tarEntry, stream) =>
-              stream
-                .chunkAll
-                .flatMap { chunk =>
-                  tarEntry.setSize(chunk.size)
-                  val stream = Stream.chunk(chunk).covary[F]
-                  Stream.resource(Resource.make(
-                    Async[F].blocking(tarOutputStream.putArchiveEntry(tarEntry))
-                  )(_ =>
-                    Async[F].blocking(tarOutputStream.closeArchiveEntry())
-                  ))
-                    .flatMap(_ =>
-                      stream
+              Stream.resource(Resource.make(
+                // This runs before `tarEntry.setSize(...)` below on line 78, and `tarEntry.getSize` is 0
+                // so writing to `tarOutputStream` fails with an error:
+                // "Request to write 'N' bytes exceeds size in header of '0' bytes"
+                Async[F].blocking(tarOutputStream.putArchiveEntry(tarEntry))
+              )(_ =>
+                Async[F].blocking(tarOutputStream.closeArchiveEntry())
+              ))
+                .flatMap(_ =>
+                  stream
+                    .chunks
+                    .flatMap { chunk =>
+                      tarEntry.setSize(tarEntry.getSize + chunk.size)
+                      Stream.chunk(chunk).covary[F]
                         .through(writeOutputStream(Async[F].pure[OutputStream](tarOutputStream), closeAfterUse = false))
-                    )
-                }
+                    }
+                )
           }
           .compile
           .drain

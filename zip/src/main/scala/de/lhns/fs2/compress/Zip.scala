@@ -60,21 +60,20 @@ class ZipArchiver[F[_] : Async](method: Int, chunkSize: Int) extends Archiver[F,
         stream
           .flatMap {
             case (zipEntry, stream) =>
-              stream
-                .chunkAll
-                .flatMap { chunk =>
-                  zipEntry.setSize(chunk.size)
-                  val stream = Stream.chunk(chunk).covary[F]
-                  Stream.resource(Resource.make(
-                    Async[F].blocking(zipOutputStream.putNextEntry(zipEntry))
-                  )(_ =>
-                    Async[F].blocking(zipOutputStream.closeEntry())
-                  ))
-                    .flatMap(_ =>
-                      stream
+              Stream.resource(Resource.make(
+                Async[F].blocking(zipOutputStream.putNextEntry(zipEntry))
+              )(_ =>
+                Async[F].blocking(zipOutputStream.closeEntry())
+              ))
+                .flatMap(_ =>
+                  stream
+                    .chunks
+                    .flatMap { chunk =>
+                      zipEntry.setSize(zipEntry.getSize + chunk.size)
+                      Stream.chunk(chunk).covary[F]
                         .through(writeOutputStream(Async[F].pure[OutputStream](zipOutputStream), closeAfterUse = false))
-                    )
-                }
+                    }
+                )
           }
           .compile
           .drain
